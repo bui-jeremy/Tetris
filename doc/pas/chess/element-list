@@ -1,0 +1,14 @@
+edu.bu.chess.agents
+edu.bu.chess.agents.test.capture
+edu.bu.chess.agents.test.movement
+edu.bu.chess.agents.test.pawnpromotion
+edu.bu.chess.game
+edu.bu.chess.game.history
+edu.bu.chess.game.move
+edu.bu.chess.game.piece
+edu.bu.chess.game.planning
+edu.bu.chess.game.planning.command
+edu.bu.chess.game.player
+edu.bu.chess.search
+edu.bu.chess.streaming
+edu.bu.chess.utils
