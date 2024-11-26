@@ -47,19 +47,20 @@ public class TetrisQAgent
 
     public Random getRandom() { return this.random; }
 
-    @Override
-    public Model initQFunction() {
-        final int inputDim = 223; // Match the number of features
-        final int hiddenDim = 32; // Hidden layer size
-        final int outDim = 1; // Output size (Q-value)
+@Override
+public Model initQFunction() {
+    final int inputDim = 225; // Match the number of features in getQFunctionInput()
+    final int hiddenDim = 32; // Hidden layer size
+    final int outDim = 1;     // Output size (Q-value)
 
-        Sequential qFunction = new Sequential();
-        qFunction.add(new Dense(inputDim, hiddenDim));
-        qFunction.add(new ReLU());
-        qFunction.add(new Dense(hiddenDim, outDim));
+    Sequential qFunction = new Sequential();
+    qFunction.add(new Dense(inputDim, hiddenDim));
+    qFunction.add(new ReLU());
+    qFunction.add(new Dense(hiddenDim, outDim));
 
-        return qFunction;
-    }
+    return qFunction;
+}
+
 
 
     /**
@@ -77,53 +78,67 @@ public class TetrisQAgent
         "state" of the game without relying on the pixels? If you were given
         a tetris game midway through play, what properties would you look for?
      */
-    @Override
-    public Matrix getQFunctionInput(final GameView game, final Mino potentialAction) {
-        Board board = game.getBoard();
-        Matrix grayscaleImage;
-        try {
-            // Get the grayscale image representation for the potential action
-            grayscaleImage = game.getGrayscaleImage(potentialAction).flatten();
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(-1);
-            return null; // Exit due to error
-        }
-
-        // Retrieve the shape and pixel data
-        int numElements = grayscaleImage.numel(); // Total number of elements
-        double[] grayscaleData = new double[numElements];
-        for (int i = 0; i < numElements; i++) {
-            grayscaleData[i] = grayscaleImage.get(0, i); // Correctly access each column in row 0
-        }
-
-        // Calculate additional board features
-        int[] columnHeights = calculateColumnHeights(board);
-        int aggregateHeight = 0;
-        int bumpiness = 0;
-
-        for (int i = 0; i < columnHeights.length; i++) {
-            aggregateHeight += columnHeights[i];
-            if (i > 0) bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
-        }
-
-        int numHoles = calculateNumberOfHoles(board, columnHeights);
-
-        // Combine features: pixel values + aggregate properties
-        double[] features = new double[grayscaleData.length + 3];
-        System.arraycopy(grayscaleData, 0, features, 0, grayscaleData.length);
-        features[grayscaleData.length] = (double) aggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
-        features[grayscaleData.length + 1] = (double) bumpiness / Board.NUM_COLS;
-        features[grayscaleData.length + 2] = (double) numHoles / (Board.NUM_ROWS * Board.NUM_COLS);
-
-        // Create and populate the matrix using Matrix.full()
-        Matrix featureMatrix = Matrix.full(1, features.length, 0.0); // Initialize a matrix of zeros
-        for (int i = 0; i < features.length; i++) {
-            featureMatrix.set(0, i, features[i]); // Populate with feature data
-        }
-
-        return featureMatrix; // Return the 1xN matrix
+@Override
+public Matrix getQFunctionInput(final GameView game, final Mino potentialAction) {
+    Board board = game.getBoard();
+    Matrix grayscaleImage;
+    try {
+        grayscaleImage = game.getGrayscaleImage(potentialAction).flatten();
+    } catch (Exception e) {
+        e.printStackTrace();
+        System.exit(-1);
+        return null;
     }
+
+    int numElements = grayscaleImage.numel();
+    double[] grayscaleData = new double[numElements];
+    for (int i = 0; i < numElements; i++) {
+        grayscaleData[i] = grayscaleImage.get(0, i);
+    }
+
+    int[] columnHeights = calculateColumnHeights(board);
+    int aggregateHeight = 0;
+    int bumpiness = 0;
+
+    for (int i = 0; i < columnHeights.length; i++) {
+        aggregateHeight += columnHeights[i];
+        if (i > 0) bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
+    }
+
+    int numHoles = calculateNumberOfHoles(board, columnHeights);
+
+    // Compute cleared lines
+    int clearedLines = 0;
+    try {
+        Method method = Board.class.getDeclaredMethod("getFullLines");
+        method.setAccessible(true);
+        clearedLines = ((List<?>) method.invoke(board)).size();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+
+    // Compute weighted aggregate height
+    int weightedAggregateHeight = 0;
+    for (int i = 0; i < columnHeights.length; i++) {
+        weightedAggregateHeight += columnHeights[i] * (i + 1);
+    }
+
+    // Combine features
+    double[] features = new double[grayscaleData.length + 5];
+    System.arraycopy(grayscaleData, 0, features, 0, grayscaleData.length);
+    features[grayscaleData.length] = (double) aggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
+    features[grayscaleData.length + 1] = (double) bumpiness / Board.NUM_COLS;
+    features[grayscaleData.length + 2] = (double) numHoles / (Board.NUM_ROWS * Board.NUM_COLS);
+    features[grayscaleData.length + 3] = (double) clearedLines / Board.NUM_ROWS;
+    features[grayscaleData.length + 4] = (double) weightedAggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
+
+    Matrix featureMatrix = Matrix.full(1, features.length, 0.0);
+    for (int i = 0; i < features.length; i++) {
+        featureMatrix.set(0, i, features[i]);
+    }
+
+    return featureMatrix;
+}
 
 
 
@@ -171,13 +186,14 @@ public class TetrisQAgent
      */
     @Override
     public boolean shouldExplore(final GameView game, final GameCounter gameCounter) {
-        if (gameCounter.getCurrentGameIdx() % 10 == 0) {
+        // Example: Adjust exploration every 50 games
+        if (gameCounter.getCurrentGameIdx() % 50 == 0) {
+            // You can use gameCounter.getCurrentGameIdx() to conditionally adjust epsilon
             epsilon = Math.max(minEpsilon, epsilon * epsilonDecay);
             System.out.println("Updated epsilon: " + epsilon);
         }
         return this.getRandom().nextDouble() < epsilon;
     }
-
 
 
     /**
@@ -249,39 +265,48 @@ public class TetrisQAgent
      * signal that is less sparse, you should see your model optimize this reward over time.
      */
     @Override
-    public double getReward(final GameView game) {
-        double reward = game.getScoreThisTurn();
-        Board board = game.getBoard();
+public double getReward(final GameView game) {
+    double reward = game.getScoreThisTurn();
+    Board board = game.getBoard();
 
-        // Calculate board features
-        int[] columnHeights = calculateColumnHeights(board);
-        int maxHeight = 0;
-        int bumpiness = 0;
+    int[] columnHeights = calculateColumnHeights(board);
+    int maxHeight = 0;
+    int bumpiness = 0;
+    int deadZones = 0;
 
-        for (int i = 0; i < columnHeights.length; i++) {
-            maxHeight = Math.max(maxHeight, columnHeights[i]);
-            if (i > 0) bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
-        }
-
-        int numHoles = calculateNumberOfHoles(board, columnHeights);
-
-        int clearedLines = 0;
-        try {
-            Method method = Board.class.getDeclaredMethod("getFullLines");
-            method.setAccessible(true); // Bypass access restriction
-            clearedLines = ((List<?>) method.invoke(board)).size();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        // Reward/Penalty based on board state
-        reward += clearedLines * 500; // Reward for clearing lines
-        reward -= maxHeight * 2;      // Penalize height
-        reward -= numHoles * 50;      // Penalize holes
-        reward -= bumpiness * 10;     // Penalize uneven terrain
-
-        return reward;
+    for (int i = 0; i < columnHeights.length; i++) {
+        maxHeight = Math.max(maxHeight, columnHeights[i]);
+        if (i > 0) bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
     }
+
+    int numHoles = calculateNumberOfHoles(board, columnHeights);
+    for (int x = 0; x < Board.NUM_COLS; x++) {
+        for (int y = 0; y < columnHeights[x]; y++) {
+            if (!board.isCoordinateOccupied(x, y)) {
+                deadZones++;
+            }
+        }
+    }
+
+    int clearedLines = 0;
+    try {
+        Method method = Board.class.getDeclaredMethod("getFullLines");
+        method.setAccessible(true);
+        clearedLines = ((List<?>) method.invoke(board)).size();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+
+    // Reward/Penalty based on board state
+    reward += clearedLines * (clearedLines == 4 ? 800 : 500); // Reward for Tetris
+    reward -= maxHeight * 2;      // Penalize height
+    reward -= numHoles * 50;      // Penalize holes
+    reward -= bumpiness * 10;     // Penalize uneven terrain
+    reward -= deadZones * 50;     // Penalize dead zones
+
+    return reward;
+}
+
 
 
 
