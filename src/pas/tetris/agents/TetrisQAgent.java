@@ -25,6 +25,7 @@ import edu.bu.tetris.nn.layers.Tanh;
 import edu.bu.tetris.training.data.Dataset;
 import edu.bu.tetris.utils.Pair;
 import java.lang.reflect.Method;
+import java.util.Arrays; 
 
 
 public class TetrisQAgent
@@ -47,20 +48,22 @@ public class TetrisQAgent
 
     public Random getRandom() { return this.random; }
 
-@Override
-public Model initQFunction() {
-    final int inputDim = 225; // Match the number of features in getQFunctionInput()
-    final int hiddenDim = 32; // Hidden layer size
-    final int outDim = 1;     // Output size (Q-value)
+    @Override
+    public Model initQFunction() {
+        final int inputDim = 230; // Ensure this matches the feature vector
+        final int hiddenDim = 64; // Hidden layer size
+        final int outDim = 1;     // Single Q-value output
 
-    Sequential qFunction = new Sequential();
-    qFunction.add(new Dense(inputDim, hiddenDim));
-    qFunction.add(new ReLU());
-    qFunction.add(new Dense(hiddenDim, outDim));
+        Sequential qFunction = new Sequential();
+        qFunction.add(new Dense(inputDim, hiddenDim));
+        qFunction.add(new ReLU());
+        qFunction.add(new Dense(hiddenDim, hiddenDim / 2));
+        qFunction.add(new ReLU());
+        qFunction.add(new Dense(hiddenDim / 2, outDim));
 
-    return qFunction;
-}
-
+        System.out.println("QFunction initialized with inputDim: " + inputDim + ", hiddenDim: " + hiddenDim);
+        return qFunction;
+    }
 
 
     /**
@@ -78,69 +81,70 @@ public Model initQFunction() {
         "state" of the game without relying on the pixels? If you were given
         a tetris game midway through play, what properties would you look for?
      */
-@Override
-public Matrix getQFunctionInput(final GameView game, final Mino potentialAction) {
-    Board board = game.getBoard();
-    Matrix grayscaleImage;
-    try {
-        grayscaleImage = game.getGrayscaleImage(potentialAction).flatten();
-    } catch (Exception e) {
-        e.printStackTrace();
-        System.exit(-1);
-        return null;
+    @Override
+    public Matrix getQFunctionInput(final GameView game, final Mino potentialAction) {
+        Board board = game.getBoard();
+        Matrix grayscaleImage;
+        try {
+            grayscaleImage = game.getGrayscaleImage(potentialAction).flatten();
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(-1);
+            return null;
+        }
+
+        int numElements = grayscaleImage.numel(); // Should return 225
+        double[] grayscaleData = new double[numElements];
+        for (int i = 0; i < numElements; i++) {
+            grayscaleData[i] = grayscaleImage.get(0, i);
+        }
+
+        // Add new features to ensure vector length matches 230
+        int[] columnHeights = calculateColumnHeights(board);
+        int aggregateHeight = Arrays.stream(columnHeights).sum();
+        int bumpiness = 0;
+        for (int i = 1; i < columnHeights.length; i++) {
+            bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
+        }
+        int numHoles = calculateNumberOfHoles(board, columnHeights);
+
+        // Add additional feature to make total dimension match 230
+        double[] features = new double[230];
+        System.arraycopy(grayscaleData, 0, features, 0, grayscaleData.length);
+        features[225] = (double) aggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
+        features[226] = (double) bumpiness / Board.NUM_COLS;
+        features[227] = (double) numHoles / (Board.NUM_ROWS * Board.NUM_COLS);
+        features[228] = calculateClearedLines(board) / (double) Board.NUM_ROWS;
+        features[229] = calculateWeightedAggregateHeight(columnHeights) / (double) (Board.NUM_ROWS * Board.NUM_COLS);
+
+        Matrix featureMatrix = Matrix.full(1, features.length, 0.0);
+        for (int i = 0; i < features.length; i++) {
+            featureMatrix.set(0, i, features[i]);
+        }
+
+        return featureMatrix;
     }
 
-    int numElements = grayscaleImage.numel();
-    double[] grayscaleData = new double[numElements];
-    for (int i = 0; i < numElements; i++) {
-        grayscaleData[i] = grayscaleImage.get(0, i);
-    }
-
-    int[] columnHeights = calculateColumnHeights(board);
-    int aggregateHeight = 0;
-    int bumpiness = 0;
-
-    for (int i = 0; i < columnHeights.length; i++) {
-        aggregateHeight += columnHeights[i];
-        if (i > 0) bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
-    }
-
-    int numHoles = calculateNumberOfHoles(board, columnHeights);
-
-    // Compute cleared lines
-    int clearedLines = 0;
-    try {
-        Method method = Board.class.getDeclaredMethod("getFullLines");
-        method.setAccessible(true);
-        clearedLines = ((List<?>) method.invoke(board)).size();
-    } catch (Exception e) {
-        e.printStackTrace();
-    }
-
-    // Compute weighted aggregate height
+private int calculateWeightedAggregateHeight(int[] columnHeights) {
     int weightedAggregateHeight = 0;
     for (int i = 0; i < columnHeights.length; i++) {
         weightedAggregateHeight += columnHeights[i] * (i + 1);
     }
-
-    // Combine features
-    double[] features = new double[grayscaleData.length + 5];
-    System.arraycopy(grayscaleData, 0, features, 0, grayscaleData.length);
-    features[grayscaleData.length] = (double) aggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
-    features[grayscaleData.length + 1] = (double) bumpiness / Board.NUM_COLS;
-    features[grayscaleData.length + 2] = (double) numHoles / (Board.NUM_ROWS * Board.NUM_COLS);
-    features[grayscaleData.length + 3] = (double) clearedLines / Board.NUM_ROWS;
-    features[grayscaleData.length + 4] = (double) weightedAggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
-
-    Matrix featureMatrix = Matrix.full(1, features.length, 0.0);
-    for (int i = 0; i < features.length; i++) {
-        featureMatrix.set(0, i, features[i]);
-    }
-
-    return featureMatrix;
+    return weightedAggregateHeight;
 }
 
 
+private int calculateClearedLines(Board board) {
+    try {
+        Method method = Board.class.getDeclaredMethod("getFullLines");
+        method.setAccessible(true);
+        List<?> fullLines = (List<?>) method.invoke(board);
+        return fullLines.size();
+    } catch (Exception e) {
+        e.printStackTrace();
+        return 0; // Default to 0 if there's an error
+    }
+}
 
     private int[] calculateColumnHeights(Board board) {
         int[] heights = new int[Board.NUM_COLS];
@@ -190,7 +194,6 @@ public Matrix getQFunctionInput(final GameView game, final Mino potentialAction)
         if (gameCounter.getCurrentGameIdx() % 50 == 0) {
             // You can use gameCounter.getCurrentGameIdx() to conditionally adjust epsilon
             epsilon = Math.max(minEpsilon, epsilon * epsilonDecay);
-            System.out.println("Updated epsilon: " + epsilon);
         }
         return this.getRandom().nextDouble() < epsilon;
     }
@@ -226,28 +229,30 @@ public Matrix getQFunctionInput(final GameView game, final Mino potentialAction)
      * Each pass through the data is called an epoch, and we will perform "numUpdates" amount
      * of epochs in between the training and eval sections of each phase.
      */
-    @Override
-    public void trainQFunction(Dataset dataset, LossFunction lossFunction, Optimizer optimizer, long numUpdates) {
-        for (int epochIdx = 0; epochIdx < numUpdates; ++epochIdx) {
-            dataset.shuffle();
-            Iterator<Pair<Matrix, Matrix>> batchIterator = dataset.iterator();
+@Override
+public void trainQFunction(Dataset dataset, LossFunction lossFunction, Optimizer optimizer, long numUpdates) {
+    for (int epochIdx = 0; epochIdx < numUpdates; ++epochIdx) {
+        dataset.shuffle();
+        Iterator<Pair<Matrix, Matrix>> batchIterator = dataset.iterator();
 
-            while (batchIterator.hasNext()) {
-                Pair<Matrix, Matrix> batch = batchIterator.next();
-
-                try {
-                    Matrix YHat = this.getQFunction().forward(batch.getFirst());
-
-                    optimizer.reset();
-                    this.getQFunction().backwards(batch.getFirst(), lossFunction.backwards(YHat, batch.getSecond()));
-                    optimizer.step();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    System.exit(-1);
-                }
+        while (batchIterator.hasNext()) {
+            Pair<Matrix, Matrix> batch = batchIterator.next();
+            try {
+                Matrix YHat = this.getQFunction().forward(batch.getFirst());
+                Matrix loss = lossFunction.backwards(YHat, batch.getSecond());
+                optimizer.reset();
+                this.getQFunction().backwards(batch.getFirst(), loss);
+                optimizer.step();
+            } catch (Exception e) {
+                e.printStackTrace();
+                return; // Stops training if an exception occurs
             }
         }
     }
+}
+
+
+
 
     /**
      * This method is where you will devise your own reward signal. Remember, the larger
