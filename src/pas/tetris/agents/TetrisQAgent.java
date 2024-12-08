@@ -50,18 +50,19 @@ public class TetrisQAgent
 
     @Override
     public Model initQFunction() {
-        final int inputDim = 230; // Ensure this matches the feature vector
-        final int hiddenDim = 64; // Hidden layer size
-        final int outDim = 1;     // Single Q-value output
+        final int inputDim = 230;
+        final int outDim = 1;
 
         Sequential qFunction = new Sequential();
-        qFunction.add(new Dense(inputDim, hiddenDim));
+        qFunction.add(new Dense(inputDim, 256)); 
         qFunction.add(new ReLU());
-        qFunction.add(new Dense(hiddenDim, hiddenDim / 2));
+        qFunction.add(new Dense(256, 128));
         qFunction.add(new ReLU());
-        qFunction.add(new Dense(hiddenDim / 2, outDim));
+        qFunction.add(new Dense(128, 64));
+        qFunction.add(new ReLU());
+        qFunction.add(new Dense(64, outDim));
 
-        System.out.println("QFunction initialized with inputDim: " + inputDim + ", hiddenDim: " + hiddenDim);
+        System.out.println("QFunction initialized!");
         return qFunction;
     }
 
@@ -93,13 +94,12 @@ public class TetrisQAgent
             return null;
         }
 
-        int numElements = grayscaleImage.numel(); // Should return 225
+        int numElements = grayscaleImage.numel(); 
         double[] grayscaleData = new double[numElements];
         for (int i = 0; i < numElements; i++) {
             grayscaleData[i] = grayscaleImage.get(0, i);
         }
 
-        // Add new features to ensure vector length matches 230
         int[] columnHeights = calculateColumnHeights(board);
         int aggregateHeight = Arrays.stream(columnHeights).sum();
         int bumpiness = 0;
@@ -108,7 +108,6 @@ public class TetrisQAgent
         }
         int numHoles = calculateNumberOfHoles(board, columnHeights);
 
-        // Add additional feature to make total dimension match 230
         double[] features = new double[230];
         System.arraycopy(grayscaleData, 0, features, 0, grayscaleData.length);
         features[225] = (double) aggregateHeight / (Board.NUM_ROWS * Board.NUM_COLS);
@@ -125,26 +124,26 @@ public class TetrisQAgent
         return featureMatrix;
     }
 
-private int calculateWeightedAggregateHeight(int[] columnHeights) {
-    int weightedAggregateHeight = 0;
-    for (int i = 0; i < columnHeights.length; i++) {
-        weightedAggregateHeight += columnHeights[i] * (i + 1);
+    private int calculateWeightedAggregateHeight(int[] columnHeights) {
+        int weightedAggregateHeight = 0;
+        for (int i = 0; i < columnHeights.length; i++) {
+            weightedAggregateHeight += columnHeights[i] * (i + 1);
+        }
+        return weightedAggregateHeight;
     }
-    return weightedAggregateHeight;
-}
 
 
-private int calculateClearedLines(Board board) {
-    try {
-        Method method = Board.class.getDeclaredMethod("getFullLines");
-        method.setAccessible(true);
-        List<?> fullLines = (List<?>) method.invoke(board);
-        return fullLines.size();
-    } catch (Exception e) {
-        e.printStackTrace();
-        return 0; // Default to 0 if there's an error
+    private int calculateClearedLines(Board board) {
+        try {
+            Method method = Board.class.getDeclaredMethod("getFullLines");
+            method.setAccessible(true);
+            List<?> fullLines = (List<?>) method.invoke(board);
+            return fullLines.size();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 0;
+        }
     }
-}
 
     private int[] calculateColumnHeights(Board board) {
         int[] heights = new int[Board.NUM_COLS];
@@ -190,13 +189,19 @@ private int calculateClearedLines(Board board) {
      */
     @Override
     public boolean shouldExplore(final GameView game, final GameCounter gameCounter) {
-        // Example: Adjust exploration every 50 games
-        if (gameCounter.getCurrentGameIdx() % 50 == 0) {
-            // You can use gameCounter.getCurrentGameIdx() to conditionally adjust epsilon
-            epsilon = Math.max(minEpsilon, epsilon * epsilonDecay);
+        // Adaptive decay: Faster decay in later phases
+        if (gameCounter.getCurrentGameIdx() % 100 == 0) { 
+            epsilon = Math.max(minEpsilon, epsilon * 0.99);
         }
+
+        // Add a random exploration burst every 500 games
+        if (gameCounter.getCurrentGameIdx() % 500 == 0) {
+            epsilon = Math.min(0.3, epsilon + 0.1);
+        }
+
         return this.getRandom().nextDouble() < epsilon;
     }
+
 
 
     /**
@@ -229,27 +234,28 @@ private int calculateClearedLines(Board board) {
      * Each pass through the data is called an epoch, and we will perform "numUpdates" amount
      * of epochs in between the training and eval sections of each phase.
      */
-@Override
-public void trainQFunction(Dataset dataset, LossFunction lossFunction, Optimizer optimizer, long numUpdates) {
-    for (int epochIdx = 0; epochIdx < numUpdates; ++epochIdx) {
-        dataset.shuffle();
-        Iterator<Pair<Matrix, Matrix>> batchIterator = dataset.iterator();
+    @Override
+    public void trainQFunction(Dataset dataset, LossFunction lossFunction, Optimizer optimizer, long numUpdates) {
+        for (int epochIdx = 0; epochIdx < numUpdates; ++epochIdx) {
+            dataset.shuffle();
+            Iterator<Pair<Matrix, Matrix>> batchIterator = dataset.iterator();
 
-        while (batchIterator.hasNext()) {
-            Pair<Matrix, Matrix> batch = batchIterator.next();
-            try {
-                Matrix YHat = this.getQFunction().forward(batch.getFirst());
-                Matrix loss = lossFunction.backwards(YHat, batch.getSecond());
-                optimizer.reset();
-                this.getQFunction().backwards(batch.getFirst(), loss);
-                optimizer.step();
-            } catch (Exception e) {
-                e.printStackTrace();
-                return; // Stops training if an exception occurs
+            while (batchIterator.hasNext()) {
+                Pair<Matrix, Matrix> batch = batchIterator.next();
+                try {
+                    Matrix YHat = this.getQFunction().forward(batch.getFirst());
+                    Matrix loss = lossFunction.backwards(YHat, batch.getSecond());
+                    optimizer.reset();
+                    this.getQFunction().backwards(batch.getFirst(), loss);
+                    optimizer.step();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return; 
+                }
             }
         }
+
     }
-}
 
 
 
@@ -270,49 +276,77 @@ public void trainQFunction(Dataset dataset, LossFunction lossFunction, Optimizer
      * signal that is less sparse, you should see your model optimize this reward over time.
      */
     @Override
-public double getReward(final GameView game) {
-    double reward = game.getScoreThisTurn();
-    Board board = game.getBoard();
+    public double getReward(final GameView game) {
+        Board board = game.getBoard();
+        int[] columnHeights = calculateColumnHeights(board);
+        int numHoles = calculateNumberOfHoles(board, columnHeights);
+        int clearedLines = calculateClearedLines(board);
+        int maxHeight = Arrays.stream(columnHeights).max().orElse(0);
+        int bumpiness = calculateBumpiness(columnHeights);
+        int deadZones = calculateDeadZones(board, columnHeights);
+        int wellDepth = calculateWellDepth(columnHeights);
 
-    int[] columnHeights = calculateColumnHeights(board);
-    int maxHeight = 0;
-    int bumpiness = 0;
-    int deadZones = 0;
+        double reward = 0.0;
 
-    for (int i = 0; i < columnHeights.length; i++) {
-        maxHeight = Math.max(maxHeight, columnHeights[i]);
-        if (i > 0) bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
+        // Positive reward for clearing lines
+        if (clearedLines > 0) {
+            reward += 100 * Math.pow(clearedLines, 2);
+        }
+
+        // Bonus for perfect clear
+        if (isBoardEmpty(board)) {
+            reward += 1500; 
+        }
+
+        // Penalties for adverse features
+        double heightFactor = 1 + (maxHeight / (double) Board.NUM_ROWS);
+        reward -= numHoles * 30 * heightFactor; 
+        reward -= maxHeight * maxHeight * 0.5;  
+        reward -= bumpiness * 10;              
+        reward -= deadZones * 50;               
+        reward -= wellDepth * 20;             
+
+        return reward;
     }
 
-    int numHoles = calculateNumberOfHoles(board, columnHeights);
-    for (int x = 0; x < Board.NUM_COLS; x++) {
-        for (int y = 0; y < columnHeights[x]; y++) {
-            if (!board.isCoordinateOccupied(x, y)) {
-                deadZones++;
+    private int calculateBumpiness(int[] columnHeights) {
+        int bumpiness = 0;
+        for (int i = 1; i < columnHeights.length; i++) {
+            bumpiness += Math.abs(columnHeights[i] - columnHeights[i - 1]);
+        }
+        return bumpiness;
+    }
+
+    private boolean isBoardEmpty(Board board) {
+        for (int x = 0; x < Board.NUM_COLS; x++) {
+            for (int y = 0; y < Board.NUM_ROWS; y++) {
+                if (board.isCoordinateOccupied(x, y)) {
+                    return false; 
+                }
             }
         }
+        return true;
     }
 
-    int clearedLines = 0;
-    try {
-        Method method = Board.class.getDeclaredMethod("getFullLines");
-        method.setAccessible(true);
-        clearedLines = ((List<?>) method.invoke(board)).size();
-    } catch (Exception e) {
-        e.printStackTrace();
+    private int calculateDeadZones(Board board, int[] columnHeights) {
+        int deadZones = 0;
+        for (int x = 0; x < Board.NUM_COLS; x++) {
+            for (int y = Board.NUM_ROWS - columnHeights[x]; y < Board.NUM_ROWS; y++) {
+                if (!board.isCoordinateOccupied(x, y)) {
+                    deadZones++;
+                }
+            }
+        }
+        return deadZones;
     }
 
-    // Reward/Penalty based on board state
-    reward += clearedLines * (clearedLines == 4 ? 800 : 500); // Reward for Tetris
-    reward -= maxHeight * 2;      // Penalize height
-    reward -= numHoles * 50;      // Penalize holes
-    reward -= bumpiness * 10;     // Penalize uneven terrain
-    reward -= deadZones * 50;     // Penalize dead zones
-
-    return reward;
-}
-
-
-
-
+    private int calculateWellDepth(int[] columnHeights) {
+        int wellDepth = 0;
+        for (int i = 1; i < columnHeights.length - 1; i++) {
+            if (columnHeights[i - 1] > columnHeights[i] && columnHeights[i + 1] > columnHeights[i]) {
+                wellDepth += Math.min(columnHeights[i - 1], columnHeights[i + 1]) - columnHeights[i];
+            }
+        }
+        return wellDepth;
+    }
 }
